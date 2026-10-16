@@ -160,12 +160,16 @@ def test_validator_gate_is_off_by_default() -> None:
     assert validator._check_cost_viability({"decision": REAL_DECISION}) == []
 
 
-def test_validator_gate_blocks_when_enabled() -> None:
+def test_validator_no_longer_blocks_on_cost() -> None:
+    """语义已变更：成本可行性不再作为校验错误（否则整轮分析会以 validation_error 中止，
+    用户看到"分析失败"）。现在由 stage2_normalizer.apply_cost_guard() 降级为「不下单」。
+
+    数学本身仍由 validate_cost_viability 提供（见上面各用例），这里只锁定"不再阻断"。
+    """
     validator = JsonValidator(ValidationSettings(cost_viability_check=True))
-    msgs = validator._check_cost_viability({"decision": REAL_DECISION})
-    assert len(msgs) == 2
-    assert "reward distance" in msgs[0]
-    assert "estimated_win_rate" in msgs[1]
+    assert validator._check_cost_viability({"decision": REAL_DECISION}) == []
+    # 原始数学仍然判它不达标
+    assert len(validate_cost_viability(REAL_DECISION)) == 2
 
 
 def test_validator_gate_respects_custom_threshold() -> None:
@@ -176,9 +180,12 @@ def test_validator_gate_respects_custom_threshold() -> None:
             assumed_round_trip_cost_pct=0.30,
         )
     )
-    # 2.35× > 2.0× 且自评胜率 70% > 所需 63.4% → 通过
+    # 2.35× > 2.0× 且自评胜率 70% > 所需 63.4% → 按数学本应通过；校验器一律不阻断
     decision = dict(REAL_DECISION, estimated_win_rate=70)
     assert validator._check_cost_viability({"decision": decision}) == []
+    assert validate_cost_viability(decision, min_reward_cost_ratio=2.0) == []
+    # 用默认门槛（3.0×）时数学仍判不达标 —— 说明只是"不阻断"，判定标准没被削弱
+    assert len(validate_cost_viability(decision)) == 1
 
 
 # ------------------------------------------------- TP1 盈亏比上限放宽止损的后果

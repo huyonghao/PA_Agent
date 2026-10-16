@@ -487,6 +487,7 @@ class JsonValidator:
             decision_stance=decision_stance,
             stage1_json=stage1_json,
             skip_next_bar=False,
+            validation=self._validation,
             previous_record=previous_record,
             structure_flip_cooldown_bars=structure_flip_cooldown_bars,
         )
@@ -713,8 +714,9 @@ class JsonValidator:
             ):
                 invalid.append(f"metrics:{msg}")
 
-            for msg in self._check_cost_viability(obj):
-                invalid.append(f"cost:{msg}")
+            # 成本可行性**不再**作为校验错误（那会让整轮分析中止、用户只看到"分析失败"）。
+            # 改由归一化阶段的 stage2_normalizer.apply_cost_guard() 把这类方案降级为
+            # 「不下单」并写明原因；数学仍在 util.trade_metrics 里统一实现。
 
             if getattr(self._validation, "stage2_coherence_checks", False):
                 from pa_agent.ai.decision_tree import validate_stage2_trace_consistency
@@ -866,29 +868,13 @@ class JsonValidator:
         )
 
     def _check_cost_viability(self, obj: dict) -> list[str]:
-        """Reject plans whose target is dwarfed by round-trip cost (opt-in).
+        """已停用（保留仅为兼容旧调用；不要重新接进校验错误列表）。
 
-        Enabled by ``ValidationSettings.cost_viability_check``; a plan whose
-        reward distance is ~1× the fee needs an 87% win rate to break even, which
-        is negative-expectancy regardless of how good the market read is.
+        历史：早期把成本不达标当作校验错误 → 模型改不出方案时整轮分析以
+        `validation_error` 中止（实测 16 个窗口里有 1 个如此，用户看到"分析失败"）。
+        现在改由 `stage2_normalizer.apply_cost_guard()` 在归一化阶段降级为「不下单」。
         """
-        if not getattr(self._validation, "cost_viability_check", False):
-            return []
-        from pa_agent.util.trade_metrics import validate_cost_viability
-
-        decision = obj.get("decision", {})
-        if not isinstance(decision, dict):
-            return []
-        return validate_cost_viability(
-            decision,
-            round_trip_cost_pct=float(
-                getattr(self._validation, "assumed_round_trip_cost_pct", 0.30)
-            ),
-            min_reward_cost_ratio=float(getattr(self._validation, "min_reward_cost_ratio", 3.0)),
-            min_win_rate_margin_pct=float(
-                getattr(self._validation, "min_win_rate_margin_pct", 5.0)
-            ),
-        )
+        return []
 
     @staticmethod
     def _check_breakout_price_extreme(obj: dict, kline_frame: Any = None) -> list[str]:

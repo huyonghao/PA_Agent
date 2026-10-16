@@ -45,6 +45,9 @@ jobs:
           tests/unit/test_decision_panel_cost.py
           tests/unit/test_stall_recovery.py
           tests/unit/test_response_cache.py
+          tests/unit/test_continuity_guard_audit.py
+          tests/unit/test_decision_panel_suppressed.py
+          tests/unit/test_cost_guard_downgrade.py
           tests/unit/test_trace_normalize_gate_guard.py
           tests/unit/test_json_validator.py
           tests/unit/test_trace_normalize.py

@@ -231,6 +231,12 @@ def cmd_record(args: argparse.Namespace) -> int:
 
     pending_files = sorted(RECORD_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime)
     viability = cost_viability(dec, round_trip_cost_pct=ROUND_TRIP_COST_PCT) if dec else None
+    cg = (s2 or {}).get("continuity_guard") if isinstance(s2, dict) else None
+    if not (isinstance(cg, dict) and cg.get("applied")):
+        cg_cost = (s2 or {}).get("cost_guard") if isinstance(s2, dict) else None
+        if isinstance(cg_cost, dict) and cg_cost.get("applied"):
+            cg = cg_cost
+    cg = cg if isinstance(cg, dict) else {}
     row = {
         "id": pred_id,
         "created_utc": created_dt.isoformat(timespec="seconds"),
@@ -255,6 +261,11 @@ def cmd_record(args: argparse.Namespace) -> int:
         "trade_confidence": _num(dec.get("trade_confidence")),
         "cost_viability": viability,
         "cost_pct": ROUND_TRIP_COST_PCT,
+        # 连续性守卫是否把模型给的方案改写成了「不下单」，以及被改写的原始方案
+        # （用于评估“守卫这次拦得对不对”——反事实结算在 resolve 里做）
+        "suppressed_by_guard": bool(cg.get("applied")),
+        "suppressed_reason": cg.get("reason"),
+        "suppressed_plan": cg.get("original_plan"),
         "reasoning": (dec.get("reasoning") or "")[:400],
         "events": event_names,
         "exception": record.exception,
@@ -277,6 +288,9 @@ def cmd_record(args: argparse.Namespace) -> int:
     if trades:
         print(f"入场/止损/止盈  : {row['entry_price']} / {row['stop_loss_price']} / {row['take_profit_price']}")
         print(f"模型自评胜率    : {row['model_estimated_win_rate']}%  信心={row['trade_confidence']}")
+    if cg.get("applied"):
+        print(f"连续性守卫      : ⚠ 已把模型方案改写为「不下单」—— {cg.get('reason')}")
+        print(f"  被改写方案    : {json.dumps(cg.get('original_plan'), ensure_ascii=False)}")
     if viability:
         flag = "⚠ 成本不划算" if viability["reward_cost_ratio"] < MIN_REWARD_COST_RATIO else "成本可行"
         print(f"成本可行性      : [{flag}] {viability['text']}")
@@ -396,6 +410,30 @@ def cmd_resolve(args: argparse.Namespace) -> int:
             last = float(bars[-1].close)
             r["outcome"] = "abstained"
             r["hold_return_pct"] = round((last - r["snapshot_price"]) / r["snapshot_price"] * 100, 4)
+
+            # 反事实：若连续性守卫没拦下那个方案，按同样的止损/止盈会怎样？
+            sp = r.get("suppressed_plan") or {}
+            d, e, s, t = (
+                sp.get("order_direction"),
+                sp.get("entry_price"),
+                sp.get("stop_loss_price"),
+                sp.get("take_profit_price"),
+            )
+            if d in ("做多", "做空") and e and s and t:
+                try:
+                    o3, x3, _, bh3, _ = _simulate(d, float(e), float(s), float(t), bars)
+                    g3 = (
+                        (x3 - float(e)) / float(e) * 100
+                        if d == "做多"
+                        else (float(e) - x3) / float(e) * 100
+                    )
+                    r["counterfactual"] = {
+                        "outcome": o3,
+                        "net_pct": round(g3 - cost_pct, 4),
+                        "bars_held": bh3,
+                    }
+                except (TypeError, ValueError) as exc:  # 单条反事实失败不影响结算
+                    r["counterfactual"] = {"error": f"{type(exc).__name__}: {exc}"}
         r["status"] = "resolved"
         r["resolved_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
 

@@ -322,6 +322,17 @@ class DecisionPanel(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self._reasoning_edit.setMinimumHeight(120)
+
+        # 程序改写提示：连续性守卫把模型方案改成「不下单」时，这里显眼地说出来。
+        # 原先该动作只写进 reasoning 文本，容易被当成"模型自己不想下单"。
+        self._suppressed_note_label = QLabel("")
+        self._suppressed_note_label.setWordWrap(True)
+        self._suppressed_note_label.setObjectName("suppressedNote")
+        self._suppressed_note_label.setStyleSheet(
+            "color: #d29922; font-size: 13px; font-weight: bold; padding: 4px 0;"
+        )
+        self._suppressed_note_label.setVisible(False)
+        layout.addWidget(self._suppressed_note_label)
         layout.addWidget(self._reasoning_edit, stretch=1)
 
         self.clear()
@@ -462,6 +473,7 @@ class DecisionPanel(QWidget):
         stage1_diagnosis: dict | None = None,
         decision_stance: str | None = None,
         confidence_threshold: int | None = None,
+        suppressed_note: str | None = None,
     ) -> None:
         self._apply_market_diagnosis(diagnosis_summary, stage1_diagnosis)
 
@@ -575,6 +587,10 @@ class DecisionPanel(QWidget):
 
         self._reasoning_edit.setPlainText(str(reasoning) if reasoning else "")
 
+        note = str(suppressed_note or "").strip()
+        self._suppressed_note_label.setText(note)
+        self._suppressed_note_label.setVisible(bool(note))
+
     def _render_cost_note(self, decision: dict) -> None:
         """预估胜率 + 扣成本后所需的盈亏平衡胜率（成本不达标标红）。
 
@@ -613,6 +629,8 @@ class DecisionPanel(QWidget):
         label.setVisible(True)
 
     def clear(self) -> None:
+        self._suppressed_note_label.setText("")
+        self._suppressed_note_label.setVisible(False)
         self._trend_label.setText("趋势：—")
         self._apply_diag_chip_style(self._trend_label, color="#6e7681")
         self._cycle_label.setText("周期：—")

@@ -3453,6 +3453,45 @@ class MainWindow(QMainWindow):
         s1 = getattr(self, "_last_stage1_diagnosis", None)
         return s1 if isinstance(s1, dict) else {}
 
+    @staticmethod
+    def _continuity_override_note(decision: dict) -> str | None:
+        """把"程序改写了模型方案"变成界面上一句显眼提示。
+
+        两类改写（都在归一化阶段发生，属于**程序**行为而非模型意愿，必须让用户看见）：
+        - `continuity_guard`：方案自相矛盾（如 direction=neutral 却给方向性订单、
+          上一轮方案未失效就在同结构位反手）；
+        - `cost_guard`：扣成本后不划算（止盈距离 < N× 双边成本，或自评胜率低于
+          扣成本盈亏平衡胜率 + 余量）。
+        """
+        if not isinstance(decision, dict):
+            return None
+        for key, label in (("continuity_guard", "连续性守卫"), ("cost_guard", "成本闸门")):
+            guard = decision.get(key)
+            if not isinstance(guard, dict) or not guard.get("applied"):
+                continue
+            plan = guard.get("original_plan") if isinstance(guard.get("original_plan"), dict) else {}
+            bits: list[str] = []
+            if plan.get("order_direction"):
+                bits.append(str(plan["order_direction"]))
+            if plan.get("order_type"):
+                bits.append(str(plan["order_type"]))
+            for pkey, tag in (
+                ("entry_price", "入场"),
+                ("stop_loss_price", "止损"),
+                ("take_profit_price", "止盈"),
+            ):
+                val = plan.get(pkey)
+                if isinstance(val, (int, float)):
+                    bits.append(f"{tag} {val:g}")
+            reason = str(guard.get("reason") or "").strip()
+            note = f"⚠ 程序{label}已把模型方案改写为「不下单」"
+            if reason:
+                note += f"：{reason}"
+            if bits:
+                note += f"（模型原方案：{' · '.join(bits)}）"
+            return note
+        return None
+
     def _on_analysis_finished(self, decision: dict) -> None:
         """Called on the main thread when the AI worker completes.
 
@@ -3500,6 +3539,7 @@ class MainWindow(QMainWindow):
                 stage1_diagnosis=stage1_diag or None,
                 decision_stance=stance,
                 confidence_threshold=self._confidence_threshold(),
+                suppressed_note=self._continuity_override_note(decision),
             )
             self._future_trend_panel.set_prediction(inner)
             self._bind_decision_tree(decision, stage1_diag or None)
