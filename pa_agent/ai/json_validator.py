@@ -605,9 +605,14 @@ class JsonValidator:
         # ── Schema validation (b and c) ───────────────────────────────────────
         try:
             import jsonschema  # type: ignore[import]
-        except ImportError:
-            logger.warning("jsonschema not installed; skipping schema validation")
-            return Ok(obj=obj)
+        except ImportError as exc:  # pragma: no cover - declared hard dependency
+            # Fail closed. Returning Ok() here accepted *any* parsed object as a
+            # valid model response, which silently disables the guard against
+            # hallucinated/invalid trade decisions (2026-10 code review).
+            raise RuntimeError(
+                "jsonschema 未安装，无法校验模型输出，已中止本次分析。"
+                "请执行 pip install 'jsonschema>=4.22' 后重试。"
+            ) from exc
 
         errors = list(jsonschema.Draft7Validator(schema).iter_errors(obj))
 
@@ -707,6 +712,9 @@ class JsonValidator:
                 kline_frame=kline_frame,
             ):
                 invalid.append(f"metrics:{msg}")
+
+            for msg in self._check_cost_viability(obj):
+                invalid.append(f"cost:{msg}")
 
             if getattr(self._validation, "stage2_coherence_checks", False):
                 from pa_agent.ai.decision_tree import validate_stage2_trace_consistency
@@ -855,6 +863,31 @@ class JsonValidator:
             bar_analysis=obj.get("bar_analysis")
             if isinstance(obj.get("bar_analysis"), dict)
             else None,
+        )
+
+    def _check_cost_viability(self, obj: dict) -> list[str]:
+        """Reject plans whose target is dwarfed by round-trip cost (opt-in).
+
+        Enabled by ``ValidationSettings.cost_viability_check``; a plan whose
+        reward distance is ~1× the fee needs an 87% win rate to break even, which
+        is negative-expectancy regardless of how good the market read is.
+        """
+        if not getattr(self._validation, "cost_viability_check", False):
+            return []
+        from pa_agent.util.trade_metrics import validate_cost_viability
+
+        decision = obj.get("decision", {})
+        if not isinstance(decision, dict):
+            return []
+        return validate_cost_viability(
+            decision,
+            round_trip_cost_pct=float(
+                getattr(self._validation, "assumed_round_trip_cost_pct", 0.30)
+            ),
+            min_reward_cost_ratio=float(getattr(self._validation, "min_reward_cost_ratio", 3.0)),
+            min_win_rate_margin_pct=float(
+                getattr(self._validation, "min_win_rate_margin_pct", 5.0)
+            ),
         )
 
     @staticmethod
